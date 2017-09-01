@@ -1,3 +1,5 @@
+#define DEBUG_MODE  (1)
+
 #include <Servo.h>
 #include <SPI.h>
 #include <WiFi101.h>
@@ -96,11 +98,13 @@ void loop() {
   if (!client) {
     return;
   }
-  while(!client.available()){
+  int cnt = 0;
+  while(!client.available() && (cnt < 100)){
     delay(1);
+    cnt++;
   }
   rest.handle(client);
-
+  client.stop();
 }
 
 // Custom function accessible by the API
