@@ -1,15 +1,17 @@
-#define DEBUG_MODE  (1)
+//#define DEBUG_MODE  (1)
 
 #include <Servo.h>
 #include <SPI.h>
 #include <WiFi101.h>
 #include <aREST.h>
 #include <Wire.h>
+#include <WiFiUdp.h>
 
 #define PROG_PIN  (0)
 #define SAIL_PIN  (3)
 #define COMPASS_MAG_ADDRESS (0x1e)
 #define COMPASS_ACC_ADDRESS (0x68)
+#define UDP_PORT  (13000)
 
 // IP Addresses
 IPAddress foresailIP(192,168,0,90);
@@ -31,12 +33,18 @@ char password[] = "divedivedive";
 
 // Create an instance of the server
 WiFiServer server(LISTEN_PORT);
+WiFiUDP Udp;
 
 // Declare functions to be exposed to the API
 int servoControl(String command);
 
+// Declare sail write function
+bool sailWrite (int cmd);
+
 // Create Servo instance
 Servo sail;
+#define SERVO_OFFSET  (90)
+#define SERVO_RANGE   (30)
 
 // Create variables for aREST
 float aoa = 0;
@@ -81,6 +89,7 @@ void setup(void)
   // Start the server
   server.begin();
   if (Serial) Serial.println("Server started");
+  Udp.begin(UDP_PORT);
 
   // Print the IP address
   IPAddress ip = WiFi.localIP();
@@ -105,6 +114,26 @@ void loop() {
   }
   rest.handle(client);
   client.stop();
+
+  // Handle UDP calls
+  if (Udp.parsePacket()) {
+    IPAddress remote(Udp.remoteIP());
+    if (remote != controllerIP) {
+      if (Serial) Serial.println("UDP packet from invalid IP");
+    } else {
+      String command;
+      while (Udp.available()) {
+        command += Udp.read();
+      }
+      int cmd = command.toInt();
+      if (Serial) {
+        Serial.print("Executing UDP command: ");
+        Serial.println(cmd);
+      }
+      sailWrite(cmd);
+    }
+  }
+  
 }
 
 // Custom function accessible by the API
@@ -114,6 +143,17 @@ int servoControl(String command) {
   if (Serial) Serial.print("Incoming command: ");
   if (Serial) Serial.println(command);
   int cmd = command.toInt();
-  sail.write(cmd);
-  return cmd;
+  if (sailWrite(cmd)) {
+    return cmd;
+  } else return 0;
 }
+
+// Sail writing command
+bool sailWrite(int cmd) {
+  if (cmd > (SERVO_OFFSET + SERVO_RANGE)) return false;
+  if (cmd < (SERVO_OFFSET - SERVO_RANGE)) return false;
+  sail.write(cmd);
+  return true;
+}
+
+
