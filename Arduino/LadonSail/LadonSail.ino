@@ -50,6 +50,7 @@ Servo sail;
 // Create variables for aREST
 float aoa = 0;
 float sailHeading = 0;
+float tailAngle = 0;
 
 void setup(void)
 {
@@ -70,6 +71,7 @@ void setup(void)
   // variables to be exposed
   rest.variable("heading", &sailHeading);
   rest.variable("aoa", &aoa);
+  rest.variable("tail", &tailAngle);
 
   // Check if we are foresail or mizzen
   // Give name and ID to device
@@ -147,25 +149,6 @@ void loop() {
   rest.handle(client);
   client.stop();
 
-  // Handle UDP calls
-//  if (Udp.parsePacket()) {
-//    IPAddress remote(Udp.remoteIP());
-//    if (remote != controllerIP) {
-//      if (Serial) Serial.println("UDP packet from invalid IP");
-//    } else {
-//      String command;
-//      while (Udp.available()) {
-//        command += Udp.read();
-//      }
-//      int cmd = command.toInt();
-//      if (Serial) {
-//        Serial.print("Executing UDP command: ");
-//        Serial.println(cmd);
-//      }
-//      sailWrite(cmd);
-//    }
-//  }
-  
 }
 
 // Custom function accessible by the API
@@ -185,6 +168,7 @@ bool sailWrite(int cmd) {
   if (cmd > (SERVO_OFFSET + SERVO_RANGE)) return false;
   if (cmd < (SERVO_OFFSET - SERVO_RANGE)) return false;
   sail.write(cmd);
+  tailAngle = cmd;
   return true;
 }
 
