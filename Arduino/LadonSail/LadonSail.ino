@@ -1,4 +1,3 @@
-
 //#define DEBUG_MODE  (1)
 
 #include <Servo.h>
@@ -6,18 +5,47 @@
 #include <WiFi101.h>
 #include <aREST.h>
 #include <Wire.h>
-#include <WiFiUdp.h>
+#include <LSM9DS1_Registers.h>
+#include <LSM9DS1_Types.h>
+#include <SparkFunLSM9DS1.h>
 
 #define PROG_PIN  (0)
 #define SAIL_PIN  (3)
 #define COMPASS_MAG_ADDRESS (0x1e)
 #define COMPASS_ACC_ADDRESS (0x68)
 #define UDP_PORT  (13000)
+#define AOA_PIN   (A0)
+#define AOA_PWR   (A1)
+#define AOA_GND   (A2)
+#define IMU_PWR   (10)
+#define IMU_GND   (9)
 
 // IP Addresses
 IPAddress foresailIP(192,168,0,90);
 IPAddress mizzenIP(192,168,0,91);
 IPAddress controllerIP(192,168,0,92);
+
+// IMU object & addresses
+LSM9DS1 imu;
+#define LSM9DS1_M   0x1E // Would be 0x1C if SDO_M is LOW
+#define LSM9DS1_AG  0x6B // Would be 0x6A if SDO_AG is LOW
+bool imuGood = false;
+
+// magnetic corrections
+#define FORESAIL_MAG_X_OFFSET   (-1247)
+#define FORESAIL_MAG_Y_OFFSET   (-3754)
+#define FORESAIL_MAG_Z_OFFSET   (-9061)
+#define FORESAIL_MAG_X_GAIN     (0.0380)
+#define FORESAIL_MAG_Y_GAIN     (0.0459)
+#define FORESAIL_MAG_Z_GAIN     (0.0288)
+#define MIZZEN_MAG_X_OFFSET     (-3222)
+#define MIZZEN_MAG_Y_OFFSET     (-4112)
+#define MIZZEN_MAG_Z_OFFSET     (-1149)
+#define MIZZEN_MAG_X_GAIN       (0.0363)
+#define MIZZEN_MAG_Y_GAIN       (0.0434)
+#define MIZZEN_MAG_Z_GAIN       (0.0250)
+int magOffsets[3];
+float magGains[3];
 
 // Status
 int status = WL_IDLE_STATUS;
@@ -42,6 +70,11 @@ int servoControl(String command);
 // Declare sail write function
 bool sailWrite (int cmd);
 
+// orientation functions
+float magScale(int val, int offset, float gain);
+float getHeading(float mX, float mY, float mZ, float aX, float aY, float aZ);
+float rad2deg(float rad);
+
 // Create Servo instance
 Servo sail;
 #define SERVO_OFFSET  (90)
@@ -49,6 +82,7 @@ Servo sail;
 
 // Create variables for aREST
 float aoa = 0;
+bool hasAoA = false;
 float sailHeading = 0;
 float tailAngle = 0;
 
@@ -65,6 +99,22 @@ void setup(void)
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
+  // start the IMU
+  pinMode(IMU_GND, OUTPUT);
+  pinMode(IMU_PWR, OUTPUT);
+  digitalWrite(IMU_GND, LOW);
+  digitalWrite(IMU_PWR, HIGH);
+  delay(100);
+  imu.settings.device.commInterface = IMU_MODE_I2C;
+  imu.settings.device.mAddress = LSM9DS1_M;
+  imu.settings.device.agAddress = LSM9DS1_AG;
+  if (imu.begin()) {
+    imuGood = true;
+    if (Serial) Serial.println("IMU started");;
+  } else {
+    if (Serial) Serial.println("IMU failed to start");;
+  }
+
   // Function to be exposed
   rest.function("sail",servoControl);
 
@@ -80,11 +130,29 @@ void setup(void)
     rest.set_id("1");
     rest.set_name("foresail");
     WiFi.config(foresailIP);
+    hasAoA = true;
+    pinMode(AOA_PWR, OUTPUT);
+    pinMode(AOA_GND, OUTPUT);
+    digitalWrite(AOA_PWR, HIGH);
+    digitalWrite(AOA_GND, LOW);
+    magOffsets[0] = FORESAIL_MAG_X_OFFSET;
+    magOffsets[1] = FORESAIL_MAG_Y_OFFSET;
+    magOffsets[2] = FORESAIL_MAG_Z_OFFSET;
+    magGains[0] = FORESAIL_MAG_X_GAIN;
+    magGains[1] = FORESAIL_MAG_Y_GAIN;
+    magGains[2] = FORESAIL_MAG_Z_GAIN;
     if (Serial) Serial.println("Foresail");
   } else {
     rest.set_id("2");
     rest.set_name("mizzen");
     WiFi.config(mizzenIP);
+    aoa = 180;
+    magOffsets[0] = MIZZEN_MAG_X_OFFSET;
+    magOffsets[1] = MIZZEN_MAG_Y_OFFSET;
+    magOffsets[2] = MIZZEN_MAG_Z_OFFSET;
+    magGains[0] = MIZZEN_MAG_X_GAIN;
+    magGains[1] = MIZZEN_MAG_Y_GAIN;
+    magGains[2] = MIZZEN_MAG_Z_GAIN;
     if (Serial) Serial.println("Mizzen");
   }
 
@@ -113,6 +181,22 @@ void setup(void)
 }
 
 void loop() {
+
+  // read windvane data
+  if (hasAoA) aoa = analogRead(A0);
+
+  // read orientation sensor data
+  if (imu.accelAvailable() && imu.magAvailable()) {
+    imu.readMag(); 
+    imu.readAccel(); 
+    // Call print attitude. The LSM9DS1's mag x and y
+    // axes are opposite to the accelerometer, so my, mx are
+    // substituted for each other.
+    sailHeading = getHeading(magScale(-imu.my, magOffsets[1], magGains[1]),
+                             magScale(-imu.mx, magOffsets[0], magGains[0]),
+                             magScale(imu.mz, magOffsets[2], magGains[2]),
+                             imu.ax, imu.ay, imu.az);
+  }
 
   // check for connection, reconnect if missing
   if (WiFi.status() == WL_CONNECTED) {
@@ -170,6 +254,38 @@ bool sailWrite(int cmd) {
   sail.write(cmd);
   tailAngle = cmd;
   return true;
+}
+
+float magScale(int val, int offset, float gain) {
+  return gain * (float)(val + offset) ;
+}
+
+float rad2deg(float rad) {
+  return (rad * 180)/PI;
+}
+
+// mag tilt compensation, per http://www.cypress.com/file/130456/download
+float getHeading(float mX, float mY, float mZ, float aX, float aY, float aZ) {
+  float Atotal = sqrt(aX*aX + aY*aY + aZ*aZ);
+  float Ax = aX/Atotal;
+  float Ay = aY/Atotal;
+  float B = 1 - (Ax*Ax);
+  float C = Ax * Ay;
+  float D = sqrt(1 - (Ax*Ax) - (Ay*Ay));
+  float x = mX*B - mY*C - mZ*Ax*D;       // equation 18
+  float y = mY*D - mZ*Ay;                // equation 19
+  float result = rad2deg(atan2(y,x));
+  if (Serial) {
+    Serial.print("mX: ");
+    Serial.print(mX);
+    Serial.print(" mY: ");
+    Serial.print(mY);
+    Serial.print(" mZ: ");
+    Serial.print(mZ);
+    Serial.print(" Heading: ");
+    Serial.println(result);
+  }
+  return result;
 }
 
 
