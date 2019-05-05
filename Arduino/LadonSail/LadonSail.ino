@@ -13,7 +13,6 @@
 #define SAIL_PIN  (3)
 #define COMPASS_MAG_ADDRESS (0x1e)
 #define COMPASS_ACC_ADDRESS (0x68)
-#define UDP_PORT  (13000)
 #define AOA_PIN   (A0)
 #define AOA_PWR   (A1)
 #define AOA_GND   (A2)
@@ -21,8 +20,10 @@
 #define IMU_GND   (9)
 
 // IP Addresses
-IPAddress foresailIP(192,168,0,90);
-IPAddress mizzenIP(192,168,0,91);
+IPAddress foresailIP(192,168,8,90);
+IPAddress mizzenIP(192,168,8,91);
+IPAddress ros_server(192,168,8,1);
+const uint16_t ros_port = 11411;
 
 // IMU object & addresses
 #define AHRS true         // Set to false for basic data read
@@ -42,8 +43,8 @@ ros::Publisher*     tail_publisher;
 ros::Subscriber<std_msgs::Float32>* cmd_subscriber;
 
 // WiFi parameters
-char ssid[] = "Underworld";
-char password[] = "divedivedive";
+char ssid[] = "BeagleBone-DEB1";
+char password[] = "BeagleBone";
 
 // Declare functions to be exposed to the API
 void tail_callback(const std_msgs::Float32& cmd);
@@ -125,6 +126,7 @@ void setup(void) {
   if (Serial) Serial.println(ip);
 
   // Start ROS
+  nh.getHardware()->setConnection(ros_server, ros_port);
   nh.initNode();
   nh.advertise(*hdg_publisher);
   nh.advertise(*tail_publisher);
