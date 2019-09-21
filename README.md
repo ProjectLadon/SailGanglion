@@ -20,3 +20,10 @@ The sail was designed in Fusion 360. There will be a link here...
 ## Libraries
 * rosserial (https://github.com/ros-drivers/rosserial)
 * Sparkfun MPU-9650 DMP library (https://github.com/sparkfun/SparkFun_MPU-9250-DMP_Arduino_Library)
+
+## Pinout
+* I2C pins -- per standard (GPIO4 & GPIO5)
+* Servo PWM -- GPIO2
+* Foresail Select (pull down) -- GPIO14
+* Mizzen Select (pull down) -- GPIO12
+* Leave foresail and mizzen select pins floating for single-sail operation
