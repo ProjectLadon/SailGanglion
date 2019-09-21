@@ -1,16 +1,18 @@
 
 //#define DEBUG_MODE  (1)
 
+#define MKR1000
+
 #include <Servo.h>
 #include <SparkFunMPU9250-DMP.h>
 #include <WiFi101.h>
-#include <aREST.h>
+#include <ros.h>
+#include <std_msgs/Float32.h>
 
 #define PROG_PIN  (0)
 #define SAIL_PIN  (3)
 #define COMPASS_MAG_ADDRESS (0x1e)
 #define COMPASS_ACC_ADDRESS (0x68)
-#define UDP_PORT  (13000)
 #define AOA_PIN   (A0)
 #define AOA_PWR   (A1)
 #define AOA_GND   (A2)
@@ -18,8 +20,10 @@
 #define IMU_GND   (9)
 
 // IP Addresses
-IPAddress foresailIP(192,168,0,90);
-IPAddress mizzenIP(192,168,0,91);
+IPAddress foresailIP(192,168,8,90);
+IPAddress mizzenIP(192,168,8,91);
+IPAddress ros_server(192,168,8,1);
+const uint16_t ros_port = 11411;
 
 // IMU object & addresses
 #define AHRS true         // Set to false for basic data read
@@ -29,68 +33,45 @@ bool imuGood = false;
 // Status
 int status = WL_IDLE_STATUS;
 
-// Create aREST instance
-aREST rest = aREST();
+// Create ROS messages and pointers for subscribers and publishers
+ros::NodeHandle     nh;
+std_msgs::Float32   cmd_msg;
+std_msgs::Float32   hdg_msg;
+std_msgs::Float32   tail_msg;
+ros::Publisher*     hdg_publisher;
+ros::Publisher*     tail_publisher;
+ros::Subscriber<std_msgs::Float32>* cmd_subscriber;
 
 // WiFi parameters
-char ssid[] = "Underworld";
-char password[] = "divedivedive";
-
-// The port to listen for incoming TCP connections
-#define LISTEN_PORT           80
-
-// Create an instance of the server
-WiFiServer server(LISTEN_PORT);
-//WiFiUDP Udp;
+char ssid[] = "BeagleBone-DEB1";
+char password[] = "BeagleBone";
 
 // Declare functions to be exposed to the API
-int servoControl(String command);
+void tail_callback(const std_msgs::Float32& cmd);
 
 // Declare sail write function
 bool sailWrite (int cmd);
 
-// orientation functions
-void processIMU();
-
 // Create Servo instance
 Servo sail;
 #define SERVO_OFFSET  (90)
-#define SERVO_RANGE   (30)
-
-// Create variables for aREST
-float sailHeading = 0;
-float tailAngle = 0;
+#define SERVO_RANGE   (45)
 
 void setup(void) {
   // Start Serial
   Serial.begin(115200);
-//  Wire.begin();
 
   // start servo
   sail.attach(SAIL_PIN);
-  sail.write(90);
+  sail.write(SERVO_OFFSET);
 
   // turn on LED output
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
-
-  // start the IMU
-//  pinMode(IMU_GND, OUTPUT);
-//  pinMode(IMU_PWR, OUTPUT);
-//  digitalWrite(IMU_GND, LOW);
-//  digitalWrite(IMU_PWR, HIGH);
   delay(1000);
 
   if (Serial) Serial.println("I live!");
     
-  // Function to be exposed
-  rest.function("sail",servoControl);
-
-  // variables to be exposed
-  rest.variable("heading", &sailHeading);
-  rest.variable("tail", &tailAngle);
-
-  
   if (imu.begin() != INV_SUCCESS) {
     while (1)
     {
@@ -105,17 +86,25 @@ void setup(void) {
                10);
 
   // Check if we are foresail or mizzen
-  // Give name and ID to device
+  // Create ROS publishers and subscribers
   pinMode(PROG_PIN, INPUT);
   if  (digitalRead(PROG_PIN) == HIGH) {
-    rest.set_id("1");
-    rest.set_name("foresail");
     WiFi.config(foresailIP);
+    static ros::Subscriber<std_msgs::Float32> tailsub("/foresail/cmd", tail_callback);
+    static ros::Publisher hdgpub("/foresail/heading", &hdg_msg);
+    static ros::Publisher tailpub("/foresail/tail", &tail_msg);
+    cmd_subscriber = &tailsub;
+    hdg_publisher = &hdgpub;
+    tail_publisher = &tailpub;
     if (Serial) Serial.println("Foresail");
   } else {
-    rest.set_id("2");
-    rest.set_name("mizzen");
     WiFi.config(mizzenIP);
+    static ros::Subscriber<std_msgs::Float32> tailsub("/mizzen/cmd", tail_callback);
+    static ros::Publisher hdgpub("/foresail/heading", &hdg_msg);
+    static ros::Publisher tailpub("/foresail/tail", &tail_msg);
+    cmd_subscriber = &tailsub;
+    hdg_publisher = &hdgpub;
+    tail_publisher = &tailpub;
     if (Serial) Serial.println("Mizzen");
   }
 
@@ -131,14 +120,17 @@ void setup(void) {
   if (Serial) Serial.println("WiFi connected");
   digitalWrite(LED_BUILTIN, HIGH);
 
-  // Start the server
-  server.begin();
-  if (Serial) Serial.println("Server started");
-
   // Print the IP address
   IPAddress ip = WiFi.localIP();
   if (Serial) Serial.print("IP Address: ");
   if (Serial) Serial.println(ip);
+
+  // Start ROS
+  nh.getHardware()->setConnection(ros_server, ros_port);
+  nh.initNode();
+  nh.advertise(*hdg_publisher);
+  nh.advertise(*tail_publisher);
+  nh.subscribe(*cmd_subscriber);
 
 }
 
@@ -152,7 +144,7 @@ void loop() {
       // quaternion values -- to estimate roll, pitch, and yaw
       //if (Serial) Serial.println("Getting compass data...");
       imu.computeEulerAngles();
-      sailHeading = 360 - imu.yaw;
+      hdg_msg.data = 360 - imu.yaw;
     }
   }
 
@@ -169,40 +161,27 @@ void loop() {
     return;
   }
 
-  // Handle REST calls
-  WiFiClient client = server.available();
-  if (!client) {
-    //if (Serial) Serial.println("No client");
-    digitalWrite(LED_BUILTIN, LOW);
-    return;
-  }
-  int cnt = 0;
-  while(!client.available() && (cnt < 50)) {
-    digitalWrite(LED_BUILTIN, HIGH);
-    delay(1);
-    cnt++;
-  }
-  if (client.available()) {
-    if (Serial) Serial.print("Received "); if (Serial) Serial.print(client.available()); if (Serial) Serial.println(" bytes");
-  } else {
-    if (Serial) Serial.println("Connection established no bytes received");
-  }
-  rest.handle(client);
-  client.stop();
+  // ROS publication
+  hdg_publisher->publish(&hdg_msg);
+  tail_publisher->publish(&tail_msg);
+
+  // ROS Spin
+  nh.spinOnce();
+  delay(50);
 
   return;
 }
 
 // Custom function accessible by the API
-int servoControl(String command) {
+void tail_callback(const std_msgs::Float32& cmd) {
 
   // Get state from command
   if (Serial) Serial.print("Incoming command: ");
-  if (Serial) Serial.println(command);
-  int cmd = command.toInt() + SERVO_OFFSET;
-  if (sailWrite(cmd)) {
-    return cmd;
-  } else return 0;
+  if (Serial) Serial.println(cmd.data);
+  int cmd_int = (int)(cmd.data + SERVO_OFFSET);
+  if (sailWrite(cmd_int)) {
+    tail_msg.data = cmd_int;
+  } else tail_msg.data = 0;
 }
 
 // Sail writing command
@@ -211,6 +190,5 @@ bool sailWrite(int cmd) {
   if (cmd < (SERVO_OFFSET - SERVO_RANGE)) cmd = (SERVO_OFFSET - SERVO_RANGE);
   if (Serial) Serial.print("Executing command "); if (Serial) Serial.println(cmd);
   sail.write(cmd);
-  tailAngle = cmd;
   return true;
 }
