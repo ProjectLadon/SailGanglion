@@ -1,28 +1,36 @@
 
 //#define DEBUG_MODE  (1)
 
-#define MKR1000
+#define ESP8266
 
 #include <Servo.h>
 #include <SparkFunMPU9250-DMP.h>
-#include <WiFi101.h>
+#include <ESP8266WiFi.h>
 #include <ros.h>
 #include <std_msgs/Float32.h>
 
-#define PROG_PIN  (0)
-#define SAIL_PIN  (3)
+/* 
+* Sail mode is selected by tieing pin to gnd. Pins are pulled up internally.
+* Single-sail mode is selected if both pins are left floating.
+* Tieing both pins to gnd will halt the process.
+*/
+#define FORESAIL_SELECT_PIN  (14)
+#define MIZZEN_SELECT_PIN    (12)
+
+#define SAIL_SERVO_PIN  (2)
 #define COMPASS_MAG_ADDRESS (0x1e)
 #define COMPASS_ACC_ADDRESS (0x68)
-#define AOA_PIN   (A0)
-#define AOA_PWR   (A1)
-#define AOA_GND   (A2)
-#define IMU_PWR   (10)
-#define IMU_GND   (9)
+//#define AOA_PIN   (A0)
+//#define AOA_PWR   (A1)
+//#define AOA_GND   (A2)
+//#define IMU_PWR   (10)
+//#define IMU_GND   (9)
 
 // IP Addresses
 IPAddress foresailIP(192,168,8,90);
 IPAddress mizzenIP(192,168,8,91);
 IPAddress ros_server(192,168,8,1);
+IPAddress netmask(255,255,255,0);
 const uint16_t ros_port = 11411;
 
 // IMU object & addresses
@@ -62,7 +70,7 @@ void setup(void) {
   Serial.begin(115200);
 
   // start servo
-  sail.attach(SAIL_PIN);
+  sail.attach(SAIL_SERVO_PIN);
   sail.write(SERVO_OFFSET);
 
   // turn on LED output
@@ -85,11 +93,19 @@ void setup(void) {
                DMP_FEATURE_GYRO_CAL, // Use gyro calibration
                10);
 
+  /* Explicitly set the ESP8266 to be a WiFi-client, otherwise, it by default,
+     would try to act as both a client and an access-point and could cause
+     network-issues with your other WiFi-devices on your WiFi-network. */
+  WiFi.mode(WIFI_STA);
+  
   // Check if we are foresail or mizzen
   // Create ROS publishers and subscribers
-  pinMode(PROG_PIN, INPUT);
-  if  (digitalRead(PROG_PIN) == HIGH) {
-    WiFi.config(foresailIP);
+  pinMode(FORESAIL_SELECT_PIN, INPUT_PULLUP);
+  pinMode(MIZZEN_SELECT_PIN, INPUT_PULLUP);
+
+  // Foresail only mode
+  if (digitalRead(FORESAIL_SELECT_PIN) == LOW && digitalRead(MIZZEN_SELECT_PIN) == HIGH) {
+    WiFi.config(foresailIP, ros_server, netmask);
     static ros::Subscriber<std_msgs::Float32> tailsub("/foresail/cmd", tail_callback);
     static ros::Publisher hdgpub("/foresail/heading", &hdg_msg);
     static ros::Publisher tailpub("/foresail/tail", &tail_msg);
@@ -97,8 +113,10 @@ void setup(void) {
     hdg_publisher = &hdgpub;
     tail_publisher = &tailpub;
     if (Serial) Serial.println("Foresail");
-  } else {
-    WiFi.config(mizzenIP);
+
+  // Mizzen only mode
+  } else if (digitalRead(FORESAIL_SELECT_PIN) == HIGH && digitalRead(MIZZEN_SELECT_PIN) == LOW) {
+    WiFi.config(mizzenIP, ros_server, netmask);
     static ros::Subscriber<std_msgs::Float32> tailsub("/mizzen/cmd", tail_callback);
     static ros::Publisher hdgpub("/foresail/heading", &hdg_msg);
     static ros::Publisher tailpub("/foresail/tail", &tail_msg);
@@ -106,6 +124,21 @@ void setup(void) {
     hdg_publisher = &hdgpub;
     tail_publisher = &tailpub;
     if (Serial) Serial.println("Mizzen");
+
+  // Single-sail mode
+  } else if (digitalRead(FORESAIL_SELECT_PIN) == HIGH && digitalRead(MIZZEN_SELECT_PIN) == HIGH) {
+    if (Serial) Serial.println("Single-sail");
+    // TODO: Define single-sail mode behavior
+    // Loop here forever
+    for (;;) {} 
+
+  // Illegal mode, both selection pins pulled low
+  } else {
+    if (Serial) Serial.println("Illegal mode selection");
+
+    // TODO: Define failsafe behavior for illegal mode selection
+    // Loop here forever
+    for (;;) {} 
   }
 
   // Connect to WiFi
