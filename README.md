@@ -19,7 +19,7 @@ The sail was designed in Fusion 360. There will be a link here...
 
 ## Libraries
 * rosserial (https://github.com/ros-drivers/rosserial)
-* Sparkfun MPU-9650 DMP library, modified for ESP compatibility (https://github.com/Grippy98/SparkFun_MPU-9250-DMP_Arduino_Library)
+* Sparkfun MPU-9650 DMP library, modified for ESP compatibility (https://github.com/rupin/SparkFun_MPU-9250-DMP_Arduino_Library)
 
 ## Pinout
 * I2C pins -- per standard (GPIO4 & GPIO5)
