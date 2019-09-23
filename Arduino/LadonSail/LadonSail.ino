@@ -29,6 +29,7 @@
 // IP Addresses
 IPAddress foresailIP(192,168,8,90);
 IPAddress mizzenIP(192,168,8,91);
+IPAddress mainIP(192,168,8,92);
 IPAddress ros_server(192,168,8,1);
 IPAddress netmask(255,255,255,0);
 const uint16_t ros_port = 11411;
@@ -39,7 +40,7 @@ MPU9250_DMP imu;
 bool imuGood = false;
 
 // Status
-int status = WL_IDLE_STATUS;
+//int status = WL_IDLE_STATUS;
 
 // Create ROS messages and pointers for subscribers and publishers
 ros::NodeHandle     nh;
@@ -88,7 +89,7 @@ void setup(void) {
       if (Serial) Serial.println();
       delay(5000);
     }
-  }
+  } else if (Serial) Serial.println("Connected to MPU-9250");
   imu.dmpBegin(DMP_FEATURE_6X_LP_QUAT | // Enable 6-axis quat
                DMP_FEATURE_GYRO_CAL, // Use gyro calibration
                10);
@@ -96,7 +97,7 @@ void setup(void) {
   /* Explicitly set the ESP8266 to be a WiFi-client, otherwise, it by default,
      would try to act as both a client and an access-point and could cause
      network-issues with your other WiFi-devices on your WiFi-network. */
-  WiFi.mode(WIFI_STA);
+  // WiFi.mode(WIFI_STA);
   
   // Check if we are foresail or mizzen
   // Create ROS publishers and subscribers
@@ -112,25 +113,29 @@ void setup(void) {
     cmd_subscriber = &tailsub;
     hdg_publisher = &hdgpub;
     tail_publisher = &tailpub;
-    if (Serial) Serial.println("Foresail");
+    if (Serial) Serial.println("Foresail program pins detected");
 
   // Mizzen only mode
   } else if (digitalRead(FORESAIL_SELECT_PIN) == HIGH && digitalRead(MIZZEN_SELECT_PIN) == LOW) {
     WiFi.config(mizzenIP, ros_server, netmask);
     static ros::Subscriber<std_msgs::Float32> tailsub("/mizzen/cmd", tail_callback);
-    static ros::Publisher hdgpub("/foresail/heading", &hdg_msg);
-    static ros::Publisher tailpub("/foresail/tail", &tail_msg);
+    static ros::Publisher hdgpub("/mizzen/heading", &hdg_msg);
+    static ros::Publisher tailpub("/mizzen/tail", &tail_msg);
     cmd_subscriber = &tailsub;
     hdg_publisher = &hdgpub;
     tail_publisher = &tailpub;
-    if (Serial) Serial.println("Mizzen");
+    if (Serial) Serial.println("Mizzen program pins detected");
 
   // Single-sail mode
   } else if (digitalRead(FORESAIL_SELECT_PIN) == HIGH && digitalRead(MIZZEN_SELECT_PIN) == HIGH) {
-    if (Serial) Serial.println("Single-sail");
-    // TODO: Define single-sail mode behavior
-    // Loop here forever
-    for (;;) {} 
+    WiFi.config(mainIP, ros_server, netmask);
+    static ros::Subscriber<std_msgs::Float32> tailsub("/sail/cmd", tail_callback);
+    static ros::Publisher hdgpub("/sail/heading", &hdg_msg);
+    static ros::Publisher tailpub("/sail/tail", &tail_msg);
+    cmd_subscriber = &tailsub;
+    hdg_publisher = &hdgpub;
+    tail_publisher = &tailpub;
+    if (Serial) Serial.println("Single-sail program pins detected");
 
   // Illegal mode, both selection pins pulled low
   } else {
@@ -142,10 +147,14 @@ void setup(void) {
   }
 
   // Connect to WiFi
-  while (status != WL_CONNECTED) {
+  uint32_t wifi_conn_cnt = 0;
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
     if (Serial) Serial.print("Attempting to connect to SSID: ");
-    if (Serial) Serial.println(ssid);
-    status = WiFi.begin(ssid, password);
+    if (Serial) Serial.print(ssid);
+    if (Serial) Serial.print(" Attempt #");
+    if (Serial) Serial.println(wifi_conn_cnt);
+    wifi_conn_cnt++;
 
     // Wait 1 seconds for connection:
     delay(1000);
